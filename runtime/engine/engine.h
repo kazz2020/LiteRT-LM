@@ -265,6 +265,24 @@ class Engine {
         absl::AnyInvocable<void(absl::StatusOr<Responses>)> callback) {
       return absl::UnimplementedError("Not implemented.");
     };
+    // Save the current step with the name `label`. You can later rewind to this
+    // checkpoint using `RewindToCheckpoint(label)`. If the checkpoint name
+    // already exists, the step number will be overwritten.
+    virtual absl::Status SaveCheckpoint(absl::string_view label) {
+      return absl::UnimplementedError("SaveCheckpoint not implemented.");
+    }
+
+    // Rewinds the session to the given checkpoint. Checkpoints after the
+    // restored step will be removed. Returns an error if the checkpoint name
+    // does not exist.
+    virtual absl::Status RewindToCheckpoint(absl::string_view label) {
+      return absl::UnimplementedError("RewindToCheckpoint not implemented.");
+    }
+
+    // Get the current step of the session.
+    virtual absl::StatusOr<int> GetCurrentStep() const {
+      return absl::UnimplementedError("GetCurrentStep not implemented.");
+    }
 
     // Get the reference to the session config for the session.
     virtual const SessionConfig& GetSessionConfig() const = 0;

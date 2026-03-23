@@ -25,6 +25,7 @@
 
 #include "absl/base/attributes.h"  // from @com_google_absl
 #include "absl/base/const_init.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -231,6 +232,39 @@ absl::StatusOr<ExecutorInputs> SessionBasic::ProcessAndCombineContents(
                         std::move(combined_image_data),
                         std::move(combined_audio_data));
   return inputs;
+}
+
+absl::Status SessionBasic::SaveCheckpoint(absl::string_view label) {
+  ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
+  checkpoint_map_[label] = current_step;
+  return absl::OkStatus();
+}
+
+absl::Status SessionBasic::RewindToCheckpoint(absl::string_view label) {
+  if (auto it = checkpoint_map_.find(label); it != checkpoint_map_.end()) {
+    ASSIGN_OR_RETURN(int current_step, executor_.GetCurrentStep());
+    if (it->second > current_step) {
+      // This shouldn't ever happen because we remove all checkpoints after the
+      // current step when we rewind to a checkpoint.
+      return absl::InvalidArgumentError(
+          absl::StrCat("Cannot rewind to a future step: ", it->second));
+    }
+
+    // Set the current step of the executor to the checkpoint step.
+    RETURN_IF_ERROR(executor_.SetCurrentStep(it->second));
+
+    // Remove all checkpoints after the current step.
+    absl::erase_if(checkpoint_map_,
+                   [current_step = it->second](const auto& pair) {
+                     return pair.second > current_step;
+                   });
+    return absl::OkStatus();
+  }
+  return absl::NotFoundError(absl::StrCat("Checkpoint not found: ", label));
+}
+
+absl::StatusOr<int> SessionBasic::GetCurrentStep() const {
+  return executor_.GetCurrentStep();
 }
 
 absl::Status SessionBasic::PrefillInternal(

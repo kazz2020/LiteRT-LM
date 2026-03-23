@@ -1704,5 +1704,56 @@ TEST_F(SessionBasicTest,
   EXPECT_THAT(texts, testing::ElementsAre("'", "s", " it"));
 }
 
+TEST_F(SessionBasicTest, SaveAndRewindCheckpoint) {
+  const std::vector<std::vector<int>> stop_token_ids = {{2294}};
+  SessionConfig session_config = SessionConfig::CreateDefault();
+  session_config.GetMutableSamplerParams() = sampler_params_;
+  session_config.GetMutableStopTokenIds() = stop_token_ids;
+  session_config.SetStartTokenId(2);
+  session_config.SetSamplerBackend(Backend::CPU);
+
+  // Set up a fake executor.
+  ASSERT_OK_AND_ASSIGN(
+      auto executor,
+      CreateFakeLlmExecutor(
+          // "Hello World!"
+          /*prefill_tokens=*/{{2, 90, 547, 58, 735, 210, 466, 2294},
+                              {2, 90, 547, 58, 735, 210, 466, 2294}},
+          // "How's it going?"
+          /*decode_tokens=*/{
+              {224}, {24}, {8}, {66}, {246}, {18}, {2295}, {2294}}));
+
+  auto session = SessionBasic::Create(
+      executor.get(), tokenizer_.get(), /*vision_executor=*/nullptr,
+      /*audio_executor=*/nullptr, session_config, std::nullopt,
+      worker_thread_pool_.get());
+  ASSERT_OK(session);
+
+  std::vector<InputData> inputs;
+  inputs.emplace_back(InputText("Hello World!"));
+
+  // Save checkpoint before prefill.
+  EXPECT_OK((*session)->SaveCheckpoint("start"));
+  EXPECT_THAT((*session)->GetCurrentStep(), testing::status::IsOkAndHolds(0));
+
+  EXPECT_OK((*session)->RunPrefill(inputs));
+
+  // Save checkpoint after prefill.
+  EXPECT_OK((*session)->SaveCheckpoint("prefill"));
+  EXPECT_THAT((*session)->GetCurrentStep(), testing::status::IsOkAndHolds(8));
+
+  // Rewind should succeed and restore the state.
+  EXPECT_OK((*session)->RewindToCheckpoint("start"));
+  EXPECT_THAT((*session)->GetCurrentStep(), testing::status::IsOkAndHolds(0));
+
+  // The "prefill" checkpoint should no longer exist.
+  EXPECT_THAT((*session)->RewindToCheckpoint("prefill"),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
+
+  // Checkpoint that doesn't exist should fail.
+  EXPECT_THAT((*session)->RewindToCheckpoint("nonexistent"),
+              testing::status::StatusIs(absl::StatusCode::kNotFound));
+}
+
 }  // namespace
 }  // namespace litert::lm

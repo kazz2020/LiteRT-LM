@@ -18,11 +18,13 @@
 #include <atomic>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"  // from @com_google_absl
 #include "absl/base/thread_annotations.h"  // from @com_google_absl
+#include "absl/container/flat_hash_map.h"  // from @com_google_absl
 #include "absl/container/flat_hash_set.h"  // from @com_google_absl
 #include "absl/functional/any_invocable.h"  // from @com_google_absl
 #include "absl/log/absl_log.h"  // from @com_google_absl
@@ -145,6 +147,19 @@ class SessionBasic : public Engine::Session {
   absl::StatusOr<ExecutorInputs> ProcessAndCombineContents(
       const std::vector<InputData>& preprocessed_contents);
 
+  // Save the current step with the name `label`. You can later rewind to this
+  // checkpoint using `RewindToCheckpoint(label)`. If the checkpoint name
+  // already exists, the step number will be overwritten.
+  absl::Status SaveCheckpoint(absl::string_view label) override;
+
+  // Rewinds the session to the given checkpoint. Checkpoints after the
+  // restored step will be removed. Returns an error if the checkpoint name
+  // does not exist.
+  absl::Status RewindToCheckpoint(absl::string_view label) override;
+
+  // Get the current step of the session.
+  absl::StatusOr<int> GetCurrentStep() const override;
+
  private:
   explicit SessionBasic(LlmExecutor* absl_nonnull executor,
                         Tokenizer* absl_nonnull tokenizer,
@@ -231,6 +246,9 @@ class SessionBasic : public Engine::Session {
   static absl::flat_hash_set<LlmExecutor*>* occupied_executors_
       ABSL_GUARDED_BY(occupied_executors_mu_);
   static absl::Mutex occupied_executors_mu_;
+
+  // The map of checkpoint name to step.
+  absl::flat_hash_map<std::string, int> checkpoint_map_;
 };
 
 }  // namespace litert::lm
