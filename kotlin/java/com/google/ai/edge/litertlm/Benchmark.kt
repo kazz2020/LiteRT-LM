@@ -78,6 +78,7 @@ fun benchmark(
         null, // SamplerConfig
         "[]", // messagesJsonString
         "[]", // toolsDescriptionJsonString
+        null, // channelsJsonString
         false, // enableConversationConstrainedDecoding
       )
 
