@@ -657,5 +657,64 @@ TEST_F(InternalCallbackChannelTest, IncompleteChannel) {
   EXPECT_THAT(output_, ElementsAre(ChannelMessage("this is ", "thought")));
 }
 
+TEST_F(InternalCallbackChannelTest, ChannelStreamWithCompleteMessageCallback) {
+  auto user_callback = CreateUserMessageCallback(output_, done_, status_);
+  JsonMessage final_message;
+  bool final_done = false;
+  auto complete_message_callback = [&](const Message& message) {
+    if (auto json_message = std::get_if<JsonMessage>(&message)) {
+      final_message = *json_message;
+      final_done = true;
+    }
+  };
+
+  auto callback = CreateInternalCallback(
+      *model_data_processor_, processor_args_, channels_,
+      std::move(user_callback), /*cancel_callback=*/nullptr,
+      std::move(complete_message_callback));
+
+  callback(Responses(TaskState::kProcessing, {"Hello"}));
+  callback(Responses(TaskState::kProcessing, {"<|channel>thought\n"}));
+  callback(Responses(TaskState::kProcessing, {"I am thinking"}));
+  callback(Responses(TaskState::kProcessing, {"<channel|>"}));
+  callback(Responses(TaskState::kProcessing, {" World!"}));
+  callback(Responses(TaskState::kDone));
+
+  EXPECT_TRUE(final_done);
+  EXPECT_THAT(final_message, testing::Eq(JsonMessage::parse(R"json({
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello World!"}],
+                "channels": {
+                  "thought": "I am thinking"
+                }
+              })json")));
+}
+
+TEST_F(InternalCallbackChannelTest,
+       ChannelStreamUnclosedWithCompleteMessageCallback) {
+  auto user_callback = CreateUserMessageCallback(output_, done_, status_);
+  JsonMessage final_message;
+  bool final_done = false;
+  auto complete_message_callback = [&](const Message& message) {
+    if (auto json_message = std::get_if<JsonMessage>(&message)) {
+      final_message = *json_message;
+      final_done = true;
+    }
+  };
+
+  auto callback = CreateInternalCallback(
+      *model_data_processor_, processor_args_, channels_,
+      std::move(user_callback), /*cancel_callback=*/nullptr,
+      std::move(complete_message_callback));
+
+  callback(Responses(TaskState::kProcessing, {"<|channel>thought\n"}));
+  callback(Responses(TaskState::kProcessing, {"I am thinking"}));
+  callback(Responses(TaskState::kDone));
+
+  EXPECT_TRUE(final_done);
+  EXPECT_TRUE(final_message.contains("channels"));
+  EXPECT_EQ(final_message["channels"]["thought"], "I am thinking");
+}
+
 }  // namespace
 }  // namespace litert::lm

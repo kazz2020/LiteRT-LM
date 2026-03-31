@@ -209,6 +209,32 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateTestMessageCallback(
   };
 }
 
+absl::AnyInvocable<void(absl::StatusOr<Message>)>
+CreateTestMultiMessageCallback(const std::vector<Message>& expected_messages,
+                               absl::Notification& done) {
+  return [&expected_messages, &done,
+          current_index = 0](absl::StatusOr<Message> message) mutable {
+    ASSERT_OK(message);
+    ASSERT_TRUE(std::holds_alternative<JsonMessage>(message.value()));
+    auto json_message = std::get<JsonMessage>(message.value());
+
+    // If the message is null, the message stream is complete.
+    if (json_message.is_null()) {
+      EXPECT_TRUE(current_index == expected_messages.size())
+          << "Expected " << expected_messages.size()
+          << " messages but only got " << current_index;
+      done.Notify();
+      return;
+    }
+
+    ASSERT_LT(current_index, expected_messages.size())
+        << "Received more messages than expected. Expected size: "
+        << expected_messages.size();
+    EXPECT_THAT(*message, testing::Eq(expected_messages[current_index]));
+    ++current_index;
+  };
+}
+
 TEST(ConversationConfigTest, CreateDefault) {
   ASSERT_OK_AND_ASSIGN(auto model_assets,
                        ModelAssets::Create(GetTestdataPath(kTestLlmPath)));
@@ -1048,6 +1074,83 @@ TEST_P(ConversationTest, SendSingleMessageAsync) {
   EXPECT_THAT(
       conversation->GetHistory(),
       testing::ElementsAre(user_message, assistant_message_for_confirm));
+}
+
+TEST_P(ConversationTest, SendMessageAsyncWithChannelContent) {
+  auto mock_session = CreateMockSession();
+  MockSession* mock_session_ptr = mock_session.get();
+  auto mock_engine = CreateMockEngine(std::move(mock_session));
+
+  std::vector<Channel> custom_channels = {{"thought", "<think>", "</think>"}};
+  ASSERT_OK_AND_ASSIGN(
+      auto conversation_config,
+      ConversationConfig::Builder()
+          .SetSessionConfig(session_config_)
+          .SetOverwritePromptTemplate(PromptTemplate(kTestJinjaPromptTemplate))
+          .SetChannels(custom_channels)
+          .Build(*mock_engine));
+  ASSERT_OK_AND_ASSIGN(auto conversation,
+                       Conversation::Create(*mock_engine, conversation_config));
+
+  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+
+  absl::string_view expected_input_text =
+      "<start_of_turn>user\n"
+      "How are you?<end_of_turn>\n";
+  EXPECT_CALL(
+      *mock_session_ptr,
+      RunPrefillAsync(testing::ElementsAre(testing::VariantWith<InputText>(
+                          testing::Property(&InputText::GetRawTextString,
+                                            expected_input_text))),
+                      testing::_))
+      .WillOnce([](const std::vector<InputData>& contents,
+                   absl::AnyInvocable<void(absl::StatusOr<Responses>)>
+                       user_callback) {
+        user_callback(Responses(TaskState::kDone));
+        return nullptr;
+      });
+
+  EXPECT_CALL(*mock_session_ptr, RunDecodeAsync(testing::_, testing::_))
+      .WillOnce(
+          [](absl::AnyInvocable<void(absl::StatusOr<Responses>)> user_callback,
+             const DecodeConfig& decode_config) {
+            user_callback(Responses(TaskState::kProcessing,
+                                    {"Hello <think>hmm</think> World!"}));
+            user_callback(Responses(TaskState::kDone));
+            return nullptr;
+          });
+
+  absl::Notification done;
+
+  std::vector<Message> expected_messages = {
+      JsonMessage{{"role", "assistant"},
+                  {"content", {{{"type", "text"}, {"text", "Hello "}}}}},
+      JsonMessage{{"role", "assistant"}, {"channels", {{"thought", "hmm"}}}},
+      JsonMessage{{"role", "assistant"},
+                  {"content", {{{"type", "text"}, {"text", " World!"}}}}},
+  };
+  auto message_callback =
+      CreateTestMultiMessageCallback(expected_messages, done);
+  EXPECT_OK(conversation->SendMessageAsync(user_message,
+                                           std::move(message_callback)));
+  done.WaitForNotificationWithTimeout(absl::Seconds(10));
+
+  // Verify the final message in history.
+  JsonMessage expected_assistant_message = nlohmann::ordered_json::parse(R"({
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "Hello  World!"
+      }
+    ],
+    "channels": {
+      "thought": "hmm"
+    }
+  })");
+
+  EXPECT_THAT(conversation->GetHistory(),
+              testing::ElementsAre(user_message, expected_assistant_message));
 }
 
 TEST_P(ConversationTest, SendSingleMessageAsyncWithExtraContext) {

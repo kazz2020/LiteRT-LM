@@ -44,10 +44,27 @@ cc_library(
 )
 
 cc_library(
+    name = "channel_util",
+    srcs = ["channel_util.cc"],
+    hdrs = ["channel_util.h"],
+    deps = [
+        ":io_types",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:string_view",
+        "@nlohmann_json//:json",
+        "//runtime/engine:io_types",
+        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_library(
     name = "internal_callback_util",
     srcs = ["internal_callback_util.cc"],
     hdrs = ["internal_callback_util.h"],
     deps = [
+        ":channel_util",
         ":io_types",
         "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/status",
@@ -88,6 +105,7 @@ cc_library(
     srcs = ["conversation.cc"],
     hdrs = ["conversation.h"],
     deps = [
+        ":channel_util",
         ":internal_callback_util",
         ":io_types",
         ":prompt_utils",
@@ -116,7 +134,21 @@ cc_library(
         "//runtime/proto:llm_model_type_cc_proto",
         "//runtime/util:litert_status_util",
         "//runtime/util:model_type_utils",
-        "@com_googlesource_code_re2//:re2",
+    ],
+)
+
+cc_test(
+    name = "channel_util_test",
+    srcs = ["channel_util_test.cc"],
+    deps = [
+        ":channel_util",
+        ":io_types",
+        "@com_google_googletest//:gtest_main",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "//runtime/engine:io_types",
+        "//runtime/util:test_utils",
     ],
 )
 

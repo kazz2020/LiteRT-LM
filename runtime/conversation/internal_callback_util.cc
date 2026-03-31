@@ -26,6 +26,7 @@
 #include "absl/status/statusor.h"  // from @com_google_absl
 #include "absl/strings/string_view.h"  // from @com_google_absl
 #include "nlohmann/json_fwd.hpp"  // from @nlohmann_json
+#include "runtime/conversation/channel_util.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
 #include "runtime/conversation/model_data_processor/model_data_processor.h"
@@ -87,47 +88,47 @@ void SendMessageToChannel(
   user_callback(Message(json_msg));
 }
 
-// Sends remaining un-flushed text at the end of generation. Uses
-// `SendMessageToChannel` if it is an unclosed channel that expects a specific
-// channel_name, otherwise sends the text to `SendMessage`.  Additionally
-// handles invoking the `complete_message_callback`.
+// Sends remaining un-flushed text at the end of generation and then invokes
+// `complete_message_callback` on the final message.
 void SendCompleteMessage(
     absl::AnyInvocable<void(absl::StatusOr<Message>)>& user_callback,
     absl::string_view accumulated_response_text,
     const ModelDataProcessor& model_data_processor,
     DataProcessorArguments processor_args, int cursor,
     absl::AnyInvocable<void(Message)>& complete_message_callback,
-    const std::string& channel_name) {
+    const std::string& active_channel_name,
+    const std::vector<Channel>& channels) {
+  // Send remaining un-flushed text at the end of generation.
   if (cursor < accumulated_response_text.size()) {
-    if (!channel_name.empty()) {
+    if (!active_channel_name.empty()) {
       SendMessageToChannel(user_callback,
                            accumulated_response_text.substr(cursor),
-                           channel_name);
+                           active_channel_name);
     } else {
       SendMessage(user_callback, accumulated_response_text.substr(cursor),
                   model_data_processor, processor_args);
     }
   }
-  if (!channel_name.empty()) {
-    JsonMessage json_msg;
-    json_msg["role"] = "assistant";
-    json_msg["channels"] = nlohmann::ordered_json::object();
-    json_msg["channels"][channel_name] = std::string(accumulated_response_text);
-    if (complete_message_callback) {
-      complete_message_callback(Message(json_msg));
-    }
-  } else {
-    const auto& complete_message = model_data_processor.ToMessage(
-        Responses(TaskState::kProcessing,
-                  {std::string(accumulated_response_text)}),
-        processor_args);
-    if (!complete_message.ok()) {
-      user_callback(complete_message.status());
-      return;
-    }
-    if (complete_message_callback) {
-      complete_message_callback(complete_message.value());
-    }
+
+  // Wrap the accumulated response text in a `Responses` object.
+  Responses responses(TaskState::kProcessing,
+                      {std::string(accumulated_response_text)});
+
+  // Extract channel content from the responses. Modifies responses in place.
+  auto extracted_channels = ExtractChannelContent(channels, responses);
+  if (!extracted_channels.ok()) {
+    user_callback(extracted_channels.status());
+    return;
+  }
+  auto complete_message =
+      model_data_processor.ToMessage(responses, processor_args);
+  if (!complete_message.ok()) {
+    user_callback(complete_message.status());
+    return;
+  }
+  InsertChannelContentIntoMessage(*extracted_channels, *complete_message);
+  if (complete_message_callback) {
+    complete_message_callback(*complete_message);
   }
   user_callback(Message(JsonMessage()));
 }
@@ -264,7 +265,7 @@ absl::AnyInvocable<void(absl::StatusOr<Responses>)> CreateInternalCallback(
       SendCompleteMessage(user_callback, accumulated_response_text,
                           model_data_processor, processor_args, cursor,
                           complete_message_callback,
-                          inside_channel ? active_channel_name : "");
+                          inside_channel ? active_channel_name : "", channels);
       cursor = accumulated_response_text.size();
       return;
     }

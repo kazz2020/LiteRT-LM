@@ -37,6 +37,7 @@
 #include "runtime/components/constrained_decoding/constraint_provider_config.h"
 #include "runtime/components/constrained_decoding/constraint_provider_factory.h"
 #include "runtime/components/prompt_template.h"
+#include "runtime/conversation/channel_util.h"
 #include "runtime/conversation/internal_callback_util.h"
 #include "runtime/conversation/io_types.h"
 #include "runtime/conversation/model_data_processor/config_registry.h"
@@ -49,7 +50,6 @@
 #include "runtime/proto/llm_model_type.pb.h"
 #include "runtime/util/model_type_utils.h"
 #include "runtime/util/status_macros.h"
-#include "re2/re2.h"  // from @com_googlesource_code_re2
 
 namespace litert::lm {
 
@@ -72,47 +72,6 @@ bool IsEmptyPreface(const Preface& preface) {
          (json_preface.tools.is_null() || json_preface.tools.empty()) &&
          (json_preface.extra_context.is_null() ||
           json_preface.extra_context.empty());
-}
-absl::StatusOr<absl::flat_hash_map<std::string, std::string>>
-ExtractChannelText(const std::vector<Channel>& channels, Responses& responses) {
-  absl::flat_hash_map<std::string, std::string> extracted_fields;
-  if (responses.GetTexts().empty()) {
-    return extracted_fields;
-  }
-
-  if (responses.GetTexts().size() > 1) {
-    return absl::InvalidArgumentError(
-        "When extracting channel text, responses must not have more than one "
-        "text.");
-  }
-
-  if (!responses.GetTexts().empty()) {
-    std::string content = responses.GetTexts()[0];
-    for (const auto& channel : channels) {
-      std::string escaped_start = RE2::QuoteMeta(channel.start);
-      std::string escaped_end = RE2::QuoteMeta(channel.end);
-      RE2 re("(?s)(.*?)" + escaped_start + "(.*?)" + escaped_end);
-
-      std::string channel_content;
-      std::string new_content;
-      absl::string_view remaining_content(content);
-      std::string text_before;
-      std::string text_inside;
-
-      while (RE2::Consume(&remaining_content, re, &text_before, &text_inside)) {
-        new_content += text_before;
-        channel_content += text_inside;
-      }
-      new_content += std::string(remaining_content);
-
-      if (!channel_content.empty()) {
-        content = new_content;
-        extracted_fields[channel.channel_name] += channel_content;
-      }
-    }
-    responses.GetMutableTexts()[0] = content;
-  }
-  return extracted_fields;
 }
 
 }  // namespace
@@ -445,30 +404,18 @@ absl::StatusOr<Message> Conversation::SendMessage(const Message& message,
                            optional_args.max_output_tokens));
     ASSIGN_OR_RETURN(Responses responses, session_->RunDecode(decode_config));
 
-    ASSIGN_OR_RETURN(auto extracted_fields,
-                     ExtractChannelText(config_.GetChannels(), responses));
+    // Extract channel content from the responses. Modifies responses in place.
+    ASSIGN_OR_RETURN(auto channel_content,
+                     ExtractChannelContent(config_.GetChannels(), responses));
 
+    // Convert responses to a message.
     ASSIGN_OR_RETURN(
         Message assistant_message,
         model_data_processor_->ToMessage(
             responses, optional_args.args.value_or(std::monostate())));
 
-    if (std::holds_alternative<nlohmann::ordered_json>(assistant_message)) {
-      auto& json_msg = std::get<nlohmann::ordered_json>(assistant_message);
-      for (const auto& [channel_name, value] : extracted_fields) {
-        if (!json_msg.contains("channels") ||
-            !json_msg["channels"].is_object()) {
-          json_msg["channels"] = nlohmann::ordered_json::object();
-        }
-        if (json_msg["channels"].contains(channel_name) &&
-            json_msg["channels"][channel_name].is_string()) {
-          json_msg["channels"][channel_name] =
-              std::string(json_msg["channels"][channel_name]) + value;
-        } else {
-          json_msg["channels"][channel_name] = value;
-        }
-      }
-    }
+    // Insert channel content into the message.
+    InsertChannelContentIntoMessage(channel_content, assistant_message);
 
     history_.push_back(assistant_message);
     return assistant_message;
