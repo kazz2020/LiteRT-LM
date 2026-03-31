@@ -122,6 +122,30 @@ absl::StatusOr<int> GetVocabSizeFromLogitsTensor(TensorBuffer& logits_tensor) {
   return logits_tensor_type.Layout().Dimensions()[2];
 }
 
+absl::Status UpdateCompilationOptions(
+    const LlmExecutorSettings& executor_settings,
+    litert::Options& compilation_options) {
+  switch (executor_settings.GetBackend()) {
+    case Backend::GPU: {
+      LITERT_ASSIGN_OR_RETURN(auto& gpu_compilation_options,
+                              compilation_options.GetGpuOptions());
+      gpu_compilation_options.AddExternalTensorPattern("kv_cache_");
+      gpu_compilation_options.AddBufferStorageTensorPattern("kv_cache_");
+      gpu_compilation_options.AddExternalTensorPattern("param_tensor");
+      gpu_compilation_options.AddBufferStorageTensorPattern("param_tensor");
+      break;
+    }
+    case Backend::CPU: {
+      break;
+    }
+    default:
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Unsupported backend: ", executor_settings.GetBackend()));
+  }
+
+  return absl::OkStatus();
+}
+
 }  // namespace
 
 LlmLiteRtMtpDrafter::~LlmLiteRtMtpDrafter() {
@@ -161,6 +185,8 @@ LlmLiteRtMtpDrafter::Create(Environment& env, ModelResources& resources,
       CreateCompilationOptions(executor_settings, ActivationDataType::FLOAT32,
                                /*signatures=*/std::nullopt,
                                /*cache_suffix=*/".mtp_drafter"));
+  RETURN_IF_ERROR(
+      UpdateCompilationOptions(executor_settings, compilation_options));
   ASSIGN_OR_RETURN(auto model,
                    resources.GetTFLiteModel(ModelType::kTfLiteMtpDrafter));
   LITERT_ASSIGN_OR_RETURN(
