@@ -191,32 +191,25 @@ absl::AnyInvocable<void(absl::StatusOr<Message>)> CreateTestMessageCallback(
       return;
     }
     // If the message is null, the last callback is received.
-    if (auto json_message = std::get_if<JsonMessage>(&message.value());
-        json_message->is_null()) {
-      JsonMessage& expected_json_message =
-          std::get<JsonMessage>(expected_message);
-      ASSERT_TRUE(expected_json_message["content"][0]["text"].is_string());
-      std::string expected_string = expected_json_message["content"][0]["text"];
+    if (message->is_null()) {
+      ASSERT_TRUE(expected_message["content"][0]["text"].is_string());
+      std::string expected_string = expected_message["content"][0]["text"];
       // The expected string should be empty after the last callback.
       EXPECT_TRUE(expected_string.empty());
       done.Notify();
       return;
     }
     // Otherwise, this is a partial response.
-    if (auto json_message = std::get_if<JsonMessage>(&message.value())) {
-      JsonMessage& expected_json_message =
-          std::get<JsonMessage>(expected_message);
-      // Compare the message text content by prefix, and update the expected
-      // message to the remaining text for the next user_callback.
-      ASSERT_TRUE(expected_json_message["content"][0]["text"].is_string());
-      ASSERT_TRUE((*json_message)["content"][0]["text"].is_string());
-      std::string expected_string = expected_json_message["content"][0]["text"];
-      std::string actual_string = (*json_message)["content"][0]["text"];
-      EXPECT_TRUE(absl::StartsWith(expected_string, actual_string))
-          << "Expected: " << expected_string << "\nActual: " << actual_string;
-      expected_json_message["content"][0]["text"] =
-          expected_string.substr(actual_string.size());
-    }
+    // Compare the message text content by prefix, and update the expected
+    // message to the remaining text for the next user_callback.
+    ASSERT_TRUE(expected_message["content"][0]["text"].is_string());
+    ASSERT_TRUE((*message)["content"][0]["text"].is_string());
+    std::string expected_string = expected_message["content"][0]["text"];
+    std::string actual_string = (*message)["content"][0]["text"];
+    EXPECT_TRUE(absl::StartsWith(expected_string, actual_string))
+        << "Expected: " << expected_string << "\nActual: " << actual_string;
+    expected_message["content"][0]["text"] =
+        expected_string.substr(actual_string.size());
   };
 }
 
@@ -226,11 +219,9 @@ CreateTestMultiMessageCallback(const std::vector<Message>& expected_messages,
   return [&expected_messages, &done,
           current_index = 0](absl::StatusOr<Message> message) mutable {
     ASSERT_OK(message);
-    ASSERT_TRUE(std::holds_alternative<JsonMessage>(message.value()));
-    auto json_message = std::get<JsonMessage>(message.value());
 
     // If the message is null, the message stream is complete.
-    if (json_message.is_null()) {
+    if (message->is_null()) {
       EXPECT_TRUE(current_index == expected_messages.size())
           << "Expected " << expected_messages.size()
           << " messages but only got " << current_index;
@@ -424,17 +415,16 @@ TEST_P(ConversationTest, SendMessage) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*engine, config));
   EXPECT_THAT(conversation->GetHistory(), testing::IsEmpty());
-  JsonMessage user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
   ASSERT_OK_AND_ASSIGN(const Message message,
                        conversation->SendMessage(user_message));
   // The expected message is just some gibberish text, because the test LLM has
   // random weights.
-  JsonMessage expected_message = {
+  Message expected_message = {
       {"role", "assistant"},
       {"content",
        {{{"type", "text"}, {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}};
-  const JsonMessage& json_message = std::get<JsonMessage>(message);
-  EXPECT_EQ(json_message, expected_message);
+  EXPECT_EQ(message, expected_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, expected_message));
 }
@@ -461,7 +451,7 @@ TEST_P(ConversationTest, SendMessageGemma3Template) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*engine, config));
   EXPECT_THAT(conversation->GetHistory(), testing::IsEmpty());
-  JsonMessage user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
   EXPECT_OK(conversation->SendMessage(user_message));
 }
 
@@ -482,7 +472,7 @@ TEST_P(ConversationTest, SendSingleMessage) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send a single message.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   absl::string_view expected_input_text =
       "<start_of_turn>user\n"
@@ -499,7 +489,7 @@ TEST_P(ConversationTest, SendSingleMessage) {
   ASSERT_OK_AND_ASSIGN(const Message response,
                        conversation->SendMessage(user_message));
 
-  JsonMessage assistant_message = nlohmann::ordered_json::parse(R"({
+  Message assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -508,7 +498,7 @@ TEST_P(ConversationTest, SendSingleMessage) {
       }
     ]
   })");
-  EXPECT_EQ(std::get<JsonMessage>(response), assistant_message);
+  EXPECT_EQ(response, assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -548,7 +538,7 @@ Thinking disabled.<end_of_turn>
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send a single message.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
   OptionalArgs optional_args;
   optional_args.extra_context = absl::flat_hash_map<std::string, std::string>{
       {"enable_thinking", "true"}};
@@ -571,7 +561,7 @@ Thinking disabled.<end_of_turn>
       const Message response,
       conversation->SendMessage(user_message, std::move(optional_args)));
 
-  JsonMessage assistant_message = nlohmann::ordered_json::parse(R"({
+  Message assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -580,7 +570,7 @@ Thinking disabled.<end_of_turn>
       }
     ]
   })");
-  EXPECT_EQ(std::get<JsonMessage>(response), assistant_message);
+  EXPECT_EQ(response, assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -629,7 +619,7 @@ Key3: {{ key3 + "\n"}}
 
   // We will send a single message with extra context that overwrites key1 and
   // adds key3.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
   OptionalArgs optional_args;
   optional_args.extra_context =
       nlohmann::ordered_json{{"key1", "val1_new"}, {"key3", "val3"}};
@@ -657,7 +647,7 @@ Key3: {{ key3 + "\n"}}
       const Message response,
       conversation->SendMessage(user_message, std::move(optional_args)));
 
-  JsonMessage assistant_message = nlohmann::ordered_json::parse(R"({
+  Message assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -666,7 +656,7 @@ Key3: {{ key3 + "\n"}}
       }
     ]
   })");
-  EXPECT_EQ(std::get<JsonMessage>(response), assistant_message);
+  EXPECT_EQ(response, assistant_message);
 }
 
 TEST_P(ConversationTest, SendMultipleMessages) {
@@ -688,7 +678,7 @@ TEST_P(ConversationTest, SendMultipleMessages) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send two consecutive messages.
-  JsonMessage user_messages = nlohmann::ordered_json::parse(R"json(
+  Message user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -718,7 +708,7 @@ TEST_P(ConversationTest, SendMultipleMessages) {
   ASSERT_OK_AND_ASSIGN(const Message response,
                        conversation->SendMessage(user_messages));
 
-  JsonMessage assistant_message = nlohmann::ordered_json::parse(R"({
+  Message assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -727,7 +717,7 @@ TEST_P(ConversationTest, SendMultipleMessages) {
       }
     ]
   })");
-  EXPECT_EQ(std::get<JsonMessage>(response), assistant_message);
+  EXPECT_EQ(response, assistant_message);
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_messages[0], user_messages[1],
                                    assistant_message));
@@ -757,7 +747,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannel) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // Send a single message.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   absl::string_view expected_input_text =
       "<start_of_turn>user\n"
@@ -777,7 +767,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannel) {
   ASSERT_OK_AND_ASSIGN(const Message response,
                        conversation->SendMessage(user_message));
 
-  JsonMessage assistant_message = nlohmann::ordered_json::parse(R"({
+  Message assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -789,7 +779,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannel) {
       "thought": "hmm"
     }
   })");
-  EXPECT_THAT(std::get<JsonMessage>(response), testing::Eq(assistant_message));
+  EXPECT_THAT(response, testing::Eq(assistant_message));
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -818,7 +808,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannelQwenThink) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // Send a single message.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   absl::string_view expected_input_text =
       "<start_of_turn>user\n"
@@ -837,7 +827,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannelQwenThink) {
   ASSERT_OK_AND_ASSIGN(const Message response,
                        conversation->SendMessage(user_message));
 
-  JsonMessage assistant_message = nlohmann::ordered_json::parse(R"({
+  Message assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -849,7 +839,7 @@ TEST_P(ConversationTest, SendSingleMessageWithChannelQwenThink) {
       "thought": "hmm"
     }
   })");
-  EXPECT_THAT(std::get<JsonMessage>(response), testing::Eq(assistant_message));
+  EXPECT_THAT(response, testing::Eq(assistant_message));
   EXPECT_THAT(conversation->GetHistory(),
               testing::ElementsAre(user_message, assistant_message));
 }
@@ -899,7 +889,7 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFiltering) {
                            {"<|channel>thought\nhmm<channel|>I am good."})));
 
   // Send the first user message.
-  JsonMessage user_message_1 = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message_1 = {{"role", "user"}, {"content", "How are you?"}};
   ASSERT_OK(conversation->SendMessage(user_message_1));
 
   // Expect rewind to checkpoint after second user message is sent.
@@ -930,7 +920,7 @@ TEST_P(ConversationTest, SendMessageWithChannelContentFiltering) {
       .WillOnce(Return(Responses(TaskState::kProcessing, {"Thank you."})));
 
   // Send the second user message.
-  JsonMessage user_message_2 = {{"role", "user"}, {"content", "That's great."}};
+  Message user_message_2 = {{"role", "user"}, {"content", "That's great."}};
   ASSERT_OK(conversation->SendMessage(user_message_2));
 }
 
@@ -953,7 +943,7 @@ TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // The first user message.
-  JsonMessage user_message_1 = nlohmann::ordered_json::parse(R"json(
+  Message user_message_1 = nlohmann::ordered_json::parse(R"json(
     {
       "role": "user",
       "content": "How are you?"
@@ -972,7 +962,7 @@ TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
   ASSERT_THAT(conversation->GetHistory().size(), testing::Eq(2));
 
   // We will send two consecutive messages when the history is not empty.
-  JsonMessage user_messages = nlohmann::ordered_json::parse(R"json(
+  Message user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -1003,7 +993,7 @@ TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
   ASSERT_OK(conversation->SendMessage(user_messages));
 
   // Check the history.
-  JsonMessage assistant_message_1 = nlohmann::ordered_json::parse(R"({
+  Message assistant_message_1 = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -1012,7 +1002,7 @@ TEST_P(ConversationTest, SendMultipleMessagesWithHistory) {
       }
     ]
   })");
-  JsonMessage assistant_message_2 = nlohmann::ordered_json::parse(R"({
+  Message assistant_message_2 = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -1099,14 +1089,14 @@ TEST_P(ConversationTest, SendMessageAsync) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*engine, config));
 
-  JsonMessage user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
   // The expected message is just some gibberish text, because the test LLM has
   // random weights.
   Message expected_message =
-      JsonMessage({{"role", "assistant"},
-                   {"content",
-                    {{{"type", "text"},
-                      {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}});
+      Message({{"role", "assistant"},
+               {"content",
+                {{{"type", "text"},
+                  {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}});
   Message expected_message_for_confirm = expected_message;
 
   absl::Notification done;
@@ -1136,7 +1126,7 @@ TEST_P(ConversationTest, SendSingleMessageAsync) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send a single message.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   absl::string_view expected_input_text =
       "<start_of_turn>user\n"
@@ -1162,7 +1152,7 @@ TEST_P(ConversationTest, SendSingleMessageAsync) {
             return nullptr;
           });
 
-  Message assistant_message = JsonMessage(nlohmann::ordered_json::parse(R"({
+  Message assistant_message = Message(nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -1199,7 +1189,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContent) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   absl::string_view expected_input_text =
       "<start_of_turn>user\n"
@@ -1230,11 +1220,11 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContent) {
   absl::Notification done;
 
   std::vector<Message> expected_messages = {
-      JsonMessage{{"role", "assistant"},
-                  {"content", {{{"type", "text"}, {"text", "Hello "}}}}},
-      JsonMessage{{"role", "assistant"}, {"channels", {{"thought", "hmm"}}}},
-      JsonMessage{{"role", "assistant"},
-                  {"content", {{{"type", "text"}, {"text", " World!"}}}}},
+      Message{{"role", "assistant"},
+              {"content", {{{"type", "text"}, {"text", "Hello "}}}}},
+      Message{{"role", "assistant"}, {"channels", {{"thought", "hmm"}}}},
+      Message{{"role", "assistant"},
+              {"content", {{{"type", "text"}, {"text", " World!"}}}}},
   };
   auto message_callback =
       CreateTestMultiMessageCallback(expected_messages, done);
@@ -1243,7 +1233,7 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContent) {
   done.WaitForNotificationWithTimeout(absl::Seconds(10));
 
   // Verify the final message in history.
-  JsonMessage expected_assistant_message = nlohmann::ordered_json::parse(R"({
+  Message expected_assistant_message = nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -1295,7 +1285,7 @@ Thinking disabled.<end_of_turn>
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send a single message.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
   OptionalArgs optional_args;
   optional_args.extra_context = absl::flat_hash_map<std::string, std::string>{
       {"enable_thinking", "true"}};
@@ -1327,7 +1317,7 @@ Thinking disabled.<end_of_turn>
             return nullptr;
           });
 
-  Message assistant_message = JsonMessage(nlohmann::ordered_json::parse(R"({
+  Message assistant_message = Message(nlohmann::ordered_json::parse(R"({
     "role": "assistant",
     "content": [
       {
@@ -1367,7 +1357,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsync) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send two consecutive messages.
-  JsonMessage user_messages = nlohmann::ordered_json::parse(R"json(
+  Message user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -1406,7 +1396,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsync) {
             return nullptr;
           });
 
-  Message assistant_message = JsonMessage(nlohmann::ordered_json::parse(R"json({
+  Message assistant_message = Message(nlohmann::ordered_json::parse(R"json({
     "role": "assistant",
     "content": [
       {
@@ -1484,9 +1474,8 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
           });
 
   // Prepare the first user message.
-  JsonMessage user_message_1 = {{"role", "user"}, {"content", "How are you?"}};
-  Message assistant_message_1 =
-      JsonMessage(nlohmann::ordered_json::parse(R"json({
+  Message user_message_1 = {{"role", "user"}, {"content", "How are you?"}};
+  Message assistant_message_1 = nlohmann::ordered_json::parse(R"json({
     "role": "assistant",
     "content": [
       {
@@ -1494,17 +1483,15 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
         "text": "I am good."
       }
     ]
-  })json"));
+  })json");
   absl::Notification done_1;
   auto message_callback_1 = [&done_1](absl::StatusOr<Message> message) {
     if (!message.ok()) {
       done_1.Notify();
       return;
     }
-    if (auto* json_msg = std::get_if<JsonMessage>(&message.value())) {
-      if (json_msg->is_null()) {
-        done_1.Notify();
-      }
+    if (message->is_null()) {
+      done_1.Notify();
     }
   };
 
@@ -1514,10 +1501,9 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
   ASSERT_TRUE(done_1.WaitForNotificationWithTimeout(absl::Seconds(10)));
 
   // Prepare the second user message.
-  JsonMessage user_message_2 = {{"role", "user"}, {"content", "That's great."}};
+  Message user_message_2 = {{"role", "user"}, {"content", "That's great."}};
   absl::Notification done_2;
-  Message assistant_message_2 =
-      JsonMessage(nlohmann::ordered_json::parse(R"json({
+  Message assistant_message_2 = nlohmann::ordered_json::parse(R"json({
     "role": "assistant",
     "content": [
       {
@@ -1525,16 +1511,14 @@ TEST_P(ConversationTest, SendMessageAsyncWithChannelContentFiltering) {
         "text": "Indeed."
       }
     ]
-  })json"));
+  })json");
   auto message_callback_2 = [&done_2](absl::StatusOr<Message> message) {
     if (!message.ok()) {
       done_2.Notify();
       return;
     }
-    if (auto* json_msg = std::get_if<JsonMessage>(&message.value())) {
-      if (json_msg->is_null()) {
-        done_2.Notify();
-      }
+    if (message->is_null()) {
+      done_2.Notify();
     }
   };
 
@@ -1598,7 +1582,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // The first user message.
-  JsonMessage user_message_1 = nlohmann::ordered_json::parse(R"json(
+  Message user_message_1 = nlohmann::ordered_json::parse(R"json(
     {
       "role": "user",
       "content": "How are you?"
@@ -1628,8 +1612,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
             return nullptr;
           });
 
-  Message assistant_message_1 =
-      JsonMessage(nlohmann::ordered_json::parse(R"json({
+  Message assistant_message_1 = Message(nlohmann::ordered_json::parse(R"json({
     "role": "assistant",
     "content": [
       {
@@ -1647,7 +1630,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
   ASSERT_THAT(conversation->GetHistory().size(), testing::Eq(2));
 
   // We will send two consecutive messages when the history is not empty.
-  JsonMessage user_messages = nlohmann::ordered_json::parse(R"json(
+  Message user_messages = nlohmann::ordered_json::parse(R"json(
     [
       {
         "role": "user",
@@ -1686,8 +1669,7 @@ TEST_P(ConversationTest, SendMultipleMessagesAsyncWithHistory) {
             return nullptr;
           });
 
-  Message assistant_message_2 =
-      JsonMessage(nlohmann::ordered_json::parse(R"json({
+  Message assistant_message_2 = Message(nlohmann::ordered_json::parse(R"json({
     "role": "assistant",
     "content": [
       {
@@ -1732,11 +1714,11 @@ TEST_P(ConversationTest, SendMessageWithPreface) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*engine, config));
   ASSERT_OK_AND_ASSIGN(const Message message,
-                       conversation->SendMessage(JsonMessage{
+                       conversation->SendMessage(Message{
                            {"role", "user"}, {"content", "Hello world!"}}));
   // The expected message is just some gibberish text, because the test LLM has
   // random weights.
-  JsonMessage expected_message;
+  Message expected_message;
   if (prefill_preface_on_init_) {
     expected_message = {{"role", "assistant"},
                         {"content",
@@ -1749,8 +1731,7 @@ TEST_P(ConversationTest, SendMessageWithPreface) {
          {{{"type", "text"},
            {"text", " noses</caption> গ্রাহ<unused5296> omp"}}}}};
   }
-  const JsonMessage& json_message = std::get<JsonMessage>(message);
-  EXPECT_EQ(json_message, expected_message);
+  EXPECT_EQ(message, expected_message);
 }
 
 TEST_P(ConversationTest, GetBenchmarkInfo) {
@@ -1775,7 +1756,7 @@ TEST_P(ConversationTest, GetBenchmarkInfo) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*engine, config));
   ASSERT_OK_AND_ASSIGN(const Message message_1,
-                       conversation->SendMessage(JsonMessage{
+                       conversation->SendMessage(Message{
                            {"role", "user"}, {"content", "Hello world!"}}));
   ASSERT_OK_AND_ASSIGN(const BenchmarkInfo benchmark_info_1,
                        conversation->GetBenchmarkInfo());
@@ -1783,7 +1764,7 @@ TEST_P(ConversationTest, GetBenchmarkInfo) {
             prefill_preface_on_init_ ? 2 : 1);
 
   ASSERT_OK_AND_ASSIGN(const Message message_2,
-                       conversation->SendMessage(JsonMessage{
+                       conversation->SendMessage(Message{
                            {"role", "user"}, {"content", "Hello world!"}}));
   ASSERT_OK_AND_ASSIGN(const BenchmarkInfo benchmark_info_2,
                        conversation->GetBenchmarkInfo());
@@ -1808,7 +1789,7 @@ TEST_P(ConversationTest, CancelGroupWithSendMessageAsync) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // We will send a single message.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   auto mock_task_controller1 = std::make_unique<MockTaskController>();
   // Expect Cancel() to be called on the first task controller when
@@ -1928,8 +1909,7 @@ CreateCancelledMessageCallback(absl::Status& status, absl::Notification& done) {
       done.Notify();
       return;
     }
-    if (auto json_message = std::get_if<JsonMessage>(&message.value());
-        json_message->is_null()) {
+    if (message->is_null()) {
       status = absl::OkStatus();
       done.Notify();
       return;
@@ -1954,12 +1934,12 @@ TEST(ConversationAccessHistoryTest, AccessHistory) {
                        Conversation::Create(*engine, config));
 
   // Send a message to the LLM.
-  JsonMessage user_message = {{"role", "user"}, {"content", "Hello world!"}};
+  Message user_message = {{"role", "user"}, {"content", "Hello world!"}};
   Message expected_assistant_message =
-      JsonMessage({{"role", "assistant"},
-                   {"content",
-                    {{{"type", "text"},
-                      {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}});
+      Message({{"role", "assistant"},
+               {"content",
+                {{{"type", "text"},
+                  {"text", "TarefaByte دارایेत्र investigaciónప్రదేశ"}}}}});
   Message expected_assistant_message_for_confirm = expected_assistant_message;
   absl::Notification done;
   EXPECT_OK(conversation->SendMessageAsync(
@@ -1971,8 +1951,7 @@ TEST(ConversationAccessHistoryTest, AccessHistory) {
   auto history = conversation->GetHistory();
   ASSERT_THAT(history.size(), 2);
   ASSERT_THAT(history.back(),
-              testing::VariantWith<JsonMessage>(std::get<JsonMessage>(
-                  expected_assistant_message_for_confirm)));
+              testing::Eq(expected_assistant_message_for_confirm));
 
   // Access the history with visitor function, and copy the last message.
   Message last_message;
@@ -1983,8 +1962,7 @@ TEST(ConversationAccessHistoryTest, AccessHistory) {
         last_message = history_view.back();
       });
   EXPECT_THAT(last_message,
-              testing::VariantWith<JsonMessage>(std::get<JsonMessage>(
-                  expected_assistant_message_for_confirm)));
+              testing::Eq(expected_assistant_message_for_confirm));
 }
 
 class ConversationCancellationTest : public testing::TestWithParam<bool> {
@@ -2014,9 +1992,8 @@ TEST_P(ConversationCancellationTest, CancelProcessWithBenchmarkInfo) {
   absl::Status status;
   absl::Notification done_1;
   conversation
-      ->SendMessageAsync(
-          JsonMessage{{"role", "user"}, {"content", "Hello world!"}},
-          CreateCancelledMessageCallback(status, done_1))
+      ->SendMessageAsync(Message{{"role", "user"}, {"content", "Hello world!"}},
+                         CreateCancelledMessageCallback(status, done_1))
       .IgnoreError();
   // Wait for a short time to ensure the decoding has started.
   absl::SleepFor(absl::Milliseconds(100));
@@ -2032,9 +2009,8 @@ TEST_P(ConversationCancellationTest, CancelProcessWithBenchmarkInfo) {
   status = absl::OkStatus();
   absl::Notification done_2;
   conversation
-      ->SendMessageAsync(
-          JsonMessage{{"role", "user"}, {"content", "Hello world!"}},
-          CreateCancelledMessageCallback(status, done_2))
+      ->SendMessageAsync(Message{{"role", "user"}, {"content", "Hello world!"}},
+                         CreateCancelledMessageCallback(status, done_2))
       .IgnoreError();
   EXPECT_OK(status);
   // Wait for the callback to be done.
@@ -2043,15 +2019,13 @@ TEST_P(ConversationCancellationTest, CancelProcessWithBenchmarkInfo) {
   // assistant.
   auto history = conversation->GetHistory();
   ASSERT_EQ(history.size(), 2);
-  EXPECT_THAT(history[0], testing::VariantWith<JsonMessage>(JsonMessage{
-                              {"role", "user"}, {"content", "Hello world!"}}));
+  EXPECT_THAT(history[0], testing::Eq(Message{{"role", "user"},
+                                              {"content", "Hello world!"}}));
   // TODO(b/450903294) - Because the cancellation is not fully rollbacked, the
   // assistant message content depends on at which step the cancellation is
   // triggered, and that is non-deterministic. Here we only check the role is
   // assistant.
-  EXPECT_THAT(std::holds_alternative<JsonMessage>(history[1]),
-              testing::IsTrue());
-  EXPECT_EQ(std::get<JsonMessage>(history[1])["role"], "assistant");
+  EXPECT_EQ(history[1]["role"], "assistant");
 
   conversation->CancelProcess();
   // No op after cancellation again.
@@ -2101,7 +2075,7 @@ TEST_P(ConversationTest, SendMessageWithConstraint) {
   constraint_arg.constraint = std::move(mock_constraint);
 
   // Send a message with the constraint.
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   EXPECT_CALL(*mock_session_ptr, RunPrefill(testing::_))
       .WillOnce(testing::Return(absl::OkStatus()));
@@ -2142,7 +2116,7 @@ TEST_P(ConversationTest, Clone) {
                        Conversation::Create(*mock_engine, conversation_config));
 
   // Send a message to populate history.
-  JsonMessage user_message = {{"role", "user"}, {"content", "Hello"}};
+  Message user_message = {{"role", "user"}, {"content", "Hello"}};
   EXPECT_CALL(*mock_session_ptr, RunPrefill(testing::_))
       .WillOnce(testing::Return(absl::OkStatus()));
   EXPECT_CALL(*mock_session_ptr, RunDecode(testing::_))
@@ -2163,11 +2137,11 @@ TEST_P(ConversationTest, Clone) {
   // Verify the history in the cloned conversation.
   auto history = cloned_conversation->GetHistory();
   EXPECT_EQ(history.size(), 2);
-  EXPECT_EQ(std::get<JsonMessage>(history[0]), user_message);
+  EXPECT_EQ(history[0], user_message);
 
   // Verify that sending a message in the cloned conversation works and uses the
   // cloned session.
-  JsonMessage user_message2 = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message2 = {{"role", "user"}, {"content", "How are you?"}};
   EXPECT_CALL(*cloned_mock_session_ptr, RunPrefill(testing::_))
       .WillOnce(testing::Return(absl::OkStatus()));
   EXPECT_CALL(*cloned_mock_session_ptr, RunDecode(testing::_))
@@ -2216,7 +2190,7 @@ TEST_P(ConversationTest, SendMessageWithMaxOutputTokens) {
   ASSERT_OK_AND_ASSIGN(auto conversation,
                        Conversation::Create(*mock_engine, conversation_config));
 
-  JsonMessage user_message = {{"role", "user"}, {"content", "How are you?"}};
+  Message user_message = {{"role", "user"}, {"content", "How are you?"}};
 
   EXPECT_CALL(*mock_session_ptr, RunPrefill(testing::_))
       .WillOnce(testing::Return(absl::OkStatus()));
@@ -2290,7 +2264,7 @@ TEST(AppendMessageTest, Gemma3Sync) {
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
   ASSERT_OK(conversation->SendMessage(
-      JsonMessage{{"role", "user"}, {"content", "Hello world!"}},
+      Message{{"role", "user"}, {"content", "Hello world!"}},
       {.has_pending_message = true}));
 
   // Append the 2nd message.
@@ -2302,7 +2276,7 @@ TEST(AppendMessageTest, Gemma3Sync) {
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
   ASSERT_OK(conversation->SendMessage(
-      JsonMessage{{"role", "user"}, {"content", " This is a long message."}},
+      Message{{"role", "user"}, {"content", " This is a long message."}},
       {.has_pending_message = true}));
 
   // Append the 3rd message.
@@ -2314,7 +2288,7 @@ TEST(AppendMessageTest, Gemma3Sync) {
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
   ASSERT_OK(conversation->SendMessage(
-      JsonMessage{{"role", "user"}, {"content", " continuing..."}},
+      Message{{"role", "user"}, {"content", " continuing..."}},
       {.has_pending_message = true}));
 
   // Finish appending message.
@@ -2331,8 +2305,8 @@ TEST(AppendMessageTest, Gemma3Sync) {
           testing::Return(Responses(TaskState::kProcessing, {"I am good."})));
   ASSERT_OK_AND_ASSIGN(
       const Message response_appending,
-      conversation->SendMessage(JsonMessage{
-          {"role", "user"}, {"content", " The message is ended."}}));
+      conversation->SendMessage(
+          Message{{"role", "user"}, {"content", " The message is ended."}}));
 }
 
 TEST(AppendMessageTest, Gemma3Async) {
@@ -2397,7 +2371,7 @@ TEST(AppendMessageTest, Gemma3Async) {
       .WillOnce(test_callback);
   absl::Notification done1;
   ASSERT_OK(conversation->SendMessageAsync(
-      JsonMessage{{"role", "user"}, {"content", "Hello world!"}},
+      Message{{"role", "user"}, {"content", "Hello world!"}},
       [&done1](absl::StatusOr<Message> message) { done1.Notify(); },
       {.has_pending_message = true}));
   done1.WaitForNotificationWithTimeout(absl::Seconds(3));
@@ -2414,7 +2388,7 @@ TEST(AppendMessageTest, Gemma3Async) {
       .WillOnce(test_callback);
   absl::Notification done2;
   ASSERT_OK(conversation->SendMessageAsync(
-      JsonMessage{{"role", "user"}, {"content", " This is a long message."}},
+      Message{{"role", "user"}, {"content", " This is a long message."}},
       [&done2](absl::StatusOr<Message> message) { done2.Notify(); },
       {.has_pending_message = true}));
   done2.WaitForNotificationWithTimeout(absl::Seconds(3));
@@ -2431,7 +2405,7 @@ TEST(AppendMessageTest, Gemma3Async) {
       .WillOnce(test_callback);
   absl::Notification done3;
   ASSERT_OK(conversation->SendMessageAsync(
-      JsonMessage{{"role", "user"}, {"content", " continuing..."}},
+      Message{{"role", "user"}, {"content", " continuing..."}},
       [&done3](absl::StatusOr<Message> message) { done3.Notify(); },
       {.has_pending_message = true}));
   done3.WaitForNotificationWithTimeout(absl::Seconds(3));
@@ -2448,7 +2422,7 @@ TEST(AppendMessageTest, Gemma3Async) {
       .WillOnce(test_callback);
   absl::Notification done4;
   EXPECT_OK(conversation->SendMessageAsync(
-      JsonMessage{{"role", "user"}, {"content", " The message is ended."}},
+      Message{{"role", "user"}, {"content", " The message is ended."}},
       [&done4](absl::StatusOr<Message> message) { done4.Notify(); },
       {.has_pending_message = true}));
   done4.WaitForNotificationWithTimeout(absl::Seconds(3));
@@ -2473,12 +2447,12 @@ TEST(AppendMessageTest, Gemma3Async) {
             return nullptr;
           });
   Message expected_assistant_message =
-      JsonMessage({{"role", "assistant"},
-                   {"content", {{{"type", "text"}, {"text", "I am good."}}}}});
+      Message({{"role", "assistant"},
+               {"content", {{{"type", "text"}, {"text", "I am good."}}}}});
   absl::Notification done5;
   // Trigger the decode by sending an empty message.
   EXPECT_OK(conversation->SendMessageAsync(
-      JsonMessage{{"role", "user"}, {"content", ""}},
+      Message{{"role", "user"}, {"content", ""}},
       CreateTestMessageCallback(expected_assistant_message, done5),
       {.has_pending_message = false}));
   done5.WaitForNotificationWithTimeout(absl::Seconds(3));
@@ -2573,7 +2547,7 @@ You are a helpful assistant.
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
   ASSERT_OK(conversation->SendMessage(
-      JsonMessage{{"role", "user"}, {"content", "Hello world!"}},
+      Message{{"role", "user"}, {"content", "Hello world!"}},
       {.has_pending_message = true}));
 
   // Append the 2nd message.
@@ -2586,7 +2560,7 @@ You are a helpful assistant.
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
   ASSERT_OK(conversation->SendMessage(
-      JsonMessage{{"role", "model"}, {"content", "Nice to meet you."}},
+      Message{{"role", "model"}, {"content", "Nice to meet you."}},
       {.has_pending_message = true}));
 
   // Append the 3rd message.
@@ -2598,7 +2572,7 @@ You are a helpful assistant.
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
   ASSERT_OK(conversation->SendMessage(
-      JsonMessage{{"role", "model"}, {"content", " How can I help you today?"}},
+      Message{{"role", "model"}, {"content", " How can I help you today?"}},
       {.has_pending_message = true}));
 
   // Append the 4th message.
@@ -2610,7 +2584,7 @@ You are a helpful assistant.
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
   ASSERT_OK(conversation->SendMessage(
-      JsonMessage{{"role", "model"}, {"content", " The message is ended."}},
+      Message{{"role", "model"}, {"content", " The message is ended."}},
       {.has_pending_message = true}));
 
   // Append the 5th message.
@@ -2624,20 +2598,19 @@ You are a helpful assistant.
                       &InputText::GetRawTextString, expected_prefill_5)))))
       .Times(1)
       .WillOnce(testing::Return(absl::OkStatus()));
-  ASSERT_OK(
-      conversation->SendMessage(JsonMessage{{"role", "tool"},
-                                            {"content",
-                                             {
-                                                 {"type", "tool_response"},
-                                                 {"tool_response",
-                                                  {
-                                                      {"location", "Paris"},
-                                                      {"temperature", 20},
-                                                      {"unit", "C"},
-                                                      {"weather", "Sunny"},
-                                                  }},
-                                             }}},
-                                {.has_pending_message = true}));
+  ASSERT_OK(conversation->SendMessage(Message{{"role", "tool"},
+                                              {"content",
+                                               {
+                                                   {"type", "tool_response"},
+                                                   {"tool_response",
+                                                    {
+                                                        {"location", "Paris"},
+                                                        {"temperature", 20},
+                                                        {"unit", "C"},
+                                                        {"weather", "Sunny"},
+                                                    }},
+                                               }}},
+                                      {.has_pending_message = true}));
 
   // Append the 6th message.
   absl::string_view expected_prefill_6 =
@@ -2654,20 +2627,19 @@ You are a helpful assistant.
   EXPECT_CALL(*mock_session_ptr, RunDecode(testing::_))
       .WillOnce(
           testing::Return(Responses(TaskState::kProcessing, {"I am good."})));
-  ASSERT_OK(
-      conversation->SendMessage(JsonMessage{{"role", "tool"},
-                                            {"content",
-                                             {
-                                                 {"type", "tool_response"},
-                                                 {"tool_response",
-                                                  {
-                                                      {"location", "London"},
-                                                      {"temperature", 15},
-                                                      {"unit", "C"},
-                                                      {"weather", "Cloudy"},
-                                                  }},
-                                             }}},
-                                {.has_pending_message = false}));
+  ASSERT_OK(conversation->SendMessage(Message{{"role", "tool"},
+                                              {"content",
+                                               {
+                                                   {"type", "tool_response"},
+                                                   {"tool_response",
+                                                    {
+                                                        {"location", "London"},
+                                                        {"temperature", 15},
+                                                        {"unit", "C"},
+                                                        {"weather", "Cloudy"},
+                                                    }},
+                                               }}},
+                                      {.has_pending_message = false}));
 }
 
 }  // namespace
