@@ -131,6 +131,7 @@ class AbstractEngine(abc.ABC):
       tool_event_handler: ToolEventHandler | None = None,
       automatic_tool_calling: bool = True,
       extra_context: collections.abc.Mapping[str, Any] | None = None,
+      filter_channel_content_from_kv_cache: bool = False,
   ) -> AbstractConversation:
     """Creates a new conversation for this engine.
 
@@ -142,6 +143,10 @@ class AbstractEngine(abc.ABC):
         automatic_tool_calling: Whether to automatically call tools. If False,
           tool calls will be returned to the user to execute.
         extra_context: Extra context for the conversation.
+        filter_channel_content_from_kv_cache: Whether to filter channel content
+          from the KV cache. This is useful when the model responds with
+          "channel" content, e.g. thinking/reasoning tokens, that should not be
+          persisted in the KV cache.
     """
 
   @abc.abstractmethod
